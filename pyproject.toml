@@ -1,0 +1,23 @@
+[project]
+name = "ac-trace-exporter"
+version = "0.1.0"
+description = "Export AgentCore trace spans from CloudWatch Logs to an OTLP endpoint via Kinesis Data Firehose"
+readme = "README.md"
+license = "MIT-0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+lambda = [
+    "opentelemetry-exporter-otlp-proto-http>=1.25.0",
+    "protobuf>=4.25.0",
+    "requests>=2.31.0",
+]
+cdk = [
+    "aws-cdk-lib>=2.150.0",
+    "constructs>=10.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "moto>=5.0.0",
+]
