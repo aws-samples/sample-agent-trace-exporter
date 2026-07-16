@@ -23,6 +23,21 @@ Lambda Processor
 S3 Bucket (30-day retention)
 ```
 
+### Why Firehose? (vs Direct Lambda Subscription)
+
+A CW Logs subscription filter can invoke Lambda directly without Firehose. This project uses Firehose for its built-in resilience features:
+
+| | With Firehose (current) | Direct Lambda |
+|---|---|---|
+| Buffering/batching | Configurable (60s / 1MB) | CW Logs batches only |
+| S3 backup | Built-in destination | Must write to S3 yourself |
+| Retry on failure | Firehose retries with backoff + dead-letter to S3 | CW Logs retries (24h retention) |
+| Cost | Firehose ingestion + Lambda | Lambda only |
+| Complexity | More infra, record disposition logic | Simpler stack |
+| Max record size | 6 MB per record batch | 256 KB per invocation payload |
+
+If you don't need the S3 backup or Firehose retry semantics, a direct CW Logs → Lambda subscription is a simpler alternative.
+
 ## Project Structure
 
 ```
@@ -67,10 +82,10 @@ Pass at deploy time via `--context` or in `cdk.json`:
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.13+
 - AWS CDK CLI (`npm install -g aws-cdk`)
 - AWS credentials configured
-- Docker (optional — local bundling via pip/uv is attempted first)
+- Docker or [Finch](https://github.com/runfinch/finch) — required for bundling Lambda dependencies during `cdk deploy`. If using Finch, set `CDK_DOCKER="finch"` in your `cdk/.env` file.
 
 ### Install Dependencies
 
@@ -80,12 +95,25 @@ uv sync --all-extras --refresh --reinstall
 
 ### Deploy
 
+1. Create your environment file from the sample:
+
 ```bash
 cd cdk
-uv run cdk deploy \
-  --context otlp_endpoint="https://your-otel-collector:4318" \
-  --context otlp_headers="Authorization=Bearer token123" \
-  --context dry_run="true"
+cp .env.sample .env
+```
+
+2. Edit `cdk/.env` with your actual values:
+
+```
+otlp_endpoint="https://your-otel-collector:4318"
+otlp_headers="Authorization=Bearer <your-token>"
+dry_run="true"
+```
+
+3. Deploy the stack:
+
+```bash
+uv run --env-file .env cdk deploy
 ```
 
 ### Filtering Spans
