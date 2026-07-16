@@ -8,18 +8,13 @@ Deploys:
 - Required IAM roles and permissions
 """
 
-import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 import aws_cdk as cdk
-import jsii
 from aws_cdk import (
     BundlingOptions,
     DockerImage,
     Duration,
-    ILocalBundling,
     RemovalPolicy,
     aws_iam as iam,
     aws_kinesisfirehose as firehose,
@@ -30,40 +25,6 @@ from aws_cdk import (
 from constructs import Construct
 
 LAMBDA_DIR = str(Path(__file__).resolve().parent.parent.parent / "lambda")
-
-
-@jsii.implements(ILocalBundling)
-class LocalBundling:
-    """Local bundling that installs Python deps via pip without Docker."""
-
-    def try_bundle(self, output_dir: str, *, image: DockerImage, **kwargs) -> bool:
-        lambda_path = Path(LAMBDA_DIR)
-
-        # Copy source files
-        for item in lambda_path.iterdir():
-            dest = Path(output_dir) / item.name
-            if item.is_dir():
-                shutil.copytree(str(item), str(dest))
-            else:
-                shutil.copy2(str(item), str(dest))
-
-        # Install requirements
-        requirements = lambda_path / "requirements.txt"
-        if requirements.exists():
-            pip_commands = [
-                ["uv", "pip", "install", "--python", "python3",
-                 "-r", str(requirements), "--target", output_dir],
-                [sys.executable, "-m", "pip",
-                 "install", "-r", str(requirements), "-t", output_dir],
-            ]
-            for cmd in pip_commands:
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode == 0:
-                    return True
-            # Fall back to Docker bundling
-            return False
-
-        return True
 
 
 class TraceExporterStack(cdk.Stack):
@@ -104,28 +65,22 @@ class TraceExporterStack(cdk.Stack):
         )
 
         # ------- Lambda Function - Firehose processor -------
-        bundling_image = DockerImage.from_registry(
-            "public.ecr.aws/lambda/python:3.12"
-        )
-
         processor_lambda = lambda_.Function(
             self,
             "TraceProcessorLambda",
-            runtime=lambda_.Runtime.PYTHON_3_12,
+            runtime=lambda_.Runtime.PYTHON_3_13,
             handler="handler.handler",
             code=lambda_.Code.from_asset(
                 LAMBDA_DIR,
                 bundling=BundlingOptions(
-                    image=bundling_image,
+                    image=DockerImage.from_registry(
+                        "public.ecr.aws/docker/library/python:3.13-slim"
+                    ),
                     command=[
-                        "bash",
-                        "-c",
-                        (
-                            "pip install -r requirements.txt -t /asset-output"
-                            " && cp -au . /asset-output"
-                        ),
+                        "bash", "-c",
+                        "pip install -r requirements.txt -t /asset-output"
+                        " && cp -a . /asset-output",
                     ],
-                    local=LocalBundling(),
                 ),
             ),
             timeout=Duration.minutes(5),
