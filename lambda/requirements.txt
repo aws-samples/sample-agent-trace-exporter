@@ -1,0 +1,3 @@
+opentelemetry-exporter-otlp-proto-http>=1.25.0
+protobuf>=4.25.0
+requests>=2.31.0
