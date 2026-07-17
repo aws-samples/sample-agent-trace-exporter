@@ -23,6 +23,63 @@ Lambda Processor
 S3 Bucket (30-day retention)
 ```
 
+### Integration Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                              TRACE DATA SOURCES                                        │
+│                                                                                        │
+│  ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐                    │
+│  │ Strands / CrewAI │   │  Custom Agent    │   │  AgentCore       │                    │
+│  │  LangGraph       │   │  Frameworks      │   │  Services        │                    │
+│  └────────┬─────────┘   └────────┬─────────┘   └────────┬─────────┘                    │
+│           │                      │                      │                              │
+│           │                      │                      │                              │
+└───────────┼──────────────────────┼──────────────────────┼──────────────────────────────┘
+            │                      │                      │
+            │  Writes spans        │  Writes spans        │  Writes spans
+            │                      │                      │
+            ▼                      ▼                      ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                              AWS ACCOUNT (Your Account)                                 │
+│                                                                                         │
+│   ┌───────────────────────────────────────────┐                                         │
+│   │   CloudWatch Logs (aws/spans log group)   │◀──── Both AgentCore services and        │
+│   │                                           │      agent frameworks write telemetry   │
+│   └─────────────────────┬─────────────────────┘      directly to this log group         │
+│                         │  Subscription Filter                                          │
+│                         ▼                                                               │
+│   ┌───────────────────────────────────────────┐                                         │
+│   │   Amazon Data Firehose                    │                                         │
+│   │   (Buffering: 60s / 1MB)                  │                                         │
+│   └──────────┬─────────────────────┬──────────┘                                         │
+│              │                     │                                                    │
+│              │ Data Transform      │ Backup (all matched records)                       │
+│              ▼                     ▼                                                    │
+│   ┌────────────────────┐   ┌────────────────┐                                           │
+│   │  Lambda Processor  │   │  S3 Bucket     │                                           │
+│   │  ─────────────────-│   │  (30-day TTL)  │                                           │
+│   │  • Decode CW Logs  │   └────────────────┘                                           │
+│   │  • Filter spans    │                                                                │
+│   │  • Convert to OTLP │                                                                │
+│   └─────────┬──────────┘                                                                │
+│             │  HTTP/protobuf POST /v1/traces                                            │
+│             ▼                                                                           │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                         THIRD-PARTY OBSERVABILITY PLATFORMS                             │
+│                                                                                         │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                │
+│   │   Datadog    │  │   Splunk     │  │  New Relic   │  │  Grafana /   │                │
+│   │              │  │              │  │              │  │  Tempo       │                │
+│   └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘                │
+│                                                                                         │
+│   Any OTLP-compatible collector or backend                                              │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Why Firehose? (vs Direct Lambda Subscription)
 
 A CW Logs subscription filter can invoke Lambda directly without Firehose. This project uses Firehose for its built-in resilience features:
