@@ -135,7 +135,34 @@ Pass at deploy time via `--context` or in `cdk.json`:
 | `otlp_headers` | OTLP headers string (fallback) | (empty) |
 | `filter_span_attributes` | Span filter expression | `aws.xray.origin=AWS::BedrockAgentCore::*` |
 | `log_group_name` | CloudWatch log group to subscribe to | `aws/spans` |
+| `subscription_filter_pattern` | CloudWatch Logs subscription filter pattern | (empty — all events) |
 | `dry_run` | Log instead of sending to OTLP | `true` |
+
+### AgentCore runtimes that use the unified span destination
+
+AgentCore runtime can deliver an agent's spans to the **agent's own** log group —
+`/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint_name>`, log stream `spans` — instead
+of the shared `aws/spans` group. This is the default for newly created agents in supported
+regions, and it requires `aws-opentelemetry-distro >= 0.18.0` (earlier versions ignore the
+setting and deliver to `aws/spans`). See
+[Span destination for agents hosted in Amazon Bedrock AgentCore runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html#observability-configure-unified-traces).
+
+To export from such an agent, point `log_group_name` at that log group:
+
+```bash
+log_group_name="/aws/bedrock-agentcore/runtimes/my_agent-AbC123XyZ-DEFAULT"
+subscription_filter_pattern='{ $.traceId != "" }'
+```
+
+`subscription_filter_pattern` matters here. Unlike the dedicated `aws/spans` group, an
+agent's own log group **mixes spans with log records** — runtime stdout and `otel-rt-logs`.
+Those records are JSON and carry a `traceId` field, so without a pattern they are forwarded
+to the processor alongside real spans. The processor now rejects them (see below), but
+filtering at the subscription is cheaper: it avoids paying Firehose and Lambda for records
+that will be discarded.
+
+Leave `subscription_filter_pattern` empty when subscribing to `aws/spans`, which contains
+only spans.
 
 ### Configuring Multiple OTLP Endpoints
 
@@ -250,6 +277,7 @@ This passes only spans where `service.name` is "agent-a" OR "agent-b" AND `deplo
 2. **Firehose Processing**: Firehose invokes the Lambda processor for data transformation. The Lambda:
    - Decodes the base64 + gzip compressed CW Logs data
    - Parses span JSON from log event messages (flat attribute format: `{"key": value}`)
+   - **Discards records that are not spans** (see below)
    - Filters spans based on `FILTER_SPAN_ATTRIBUTES` (default: `aws.xray.origin=AWS::BedrockAgentCore::*`)
    - Converts matching spans to OTLP protobuf format
    - **Dry-run mode** (default): Logs incoming records and OTLP output to CloudWatch without sending
@@ -262,6 +290,31 @@ This passes only spans where `service.name` is "agent-a" OR "agent-b" AND `deplo
 
 4. **Backup**: All `Ok` records are stored in S3 (gzipped, partitioned by date) with a 30-day retention.
 
+### Distinguishing spans from log records
+
+A log group that holds both spans and log records needs care, because log records are also
+JSON with a `traceId` field. Treating one as a span fails in two distinct ways:
+
+- A log record emitted **outside** any span has `traceId: ""`. Serialised as a span it
+  produces zero-length ids, and OTLP backends reject the *entire*
+  `ExportTraceServiceRequest` — e.g. Tempo answers
+  `InvalidArgument: trace ids must be 128 bit, received 0 bits`. Because the rejection is
+  per-request, one such record discards every real span batched with it.
+- A log record emitted **inside** a span carries that span's real `traceId` *and* `spanId`,
+  so validating id lengths alone still admits it. It then becomes a nameless, parentless
+  span that collides with the real span of the same id, and the trace renders with
+  duplicated subtrees.
+
+`_is_span_record()` therefore requires both well-formed ids (32-hex trace, 16-hex span) and
+span shape (a `name` and a `startTimeUnixNano`). Log records have neither. Skipped records
+are counted in the Lambda log as `Skipped N non-span record(s)`.
+
+Run the tests with:
+
+```bash
+uv sync --all-extras
+uv run pytest tests/ -q
+```
 
 ## Security
 

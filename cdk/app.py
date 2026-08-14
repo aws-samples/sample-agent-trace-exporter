@@ -38,6 +38,13 @@ app = cdk.App(
             "aws.xray.origin=AWS::BedrockAgentCore::*",
         ),
         "log_group_name": os.environ.get("log_group_name", "aws/spans"),
+        # Needed when subscribing to an AgentCore runtime's own log group (the
+        # unified span destination), because that group also carries runtime stdout
+        # and otel-rt-logs records whose JSON has traceId "". Those get mistaken for
+        # spans by the processor and exported as garbage with empty IDs.
+        "subscription_filter_pattern": os.environ.get(
+            "subscription_filter_pattern", ""
+        ),
         "dry_run": os.environ.get("dry_run", "true"),
     }
 )
