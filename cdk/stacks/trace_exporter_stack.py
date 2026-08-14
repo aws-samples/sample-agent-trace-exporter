@@ -49,6 +49,14 @@ class TraceExporterStack(cdk.Stack):
         log_group_name = (
             self.node.try_get_context("log_group_name") or "aws/spans"
         )
+        # Subscription filter pattern. Defaults to matching everything, which is
+        # correct for a dedicated spans log group. When subscribing to an AgentCore
+        # runtime's own log group the group ALSO carries runtime stdout and
+        # otel-rt-logs records, whose JSON has traceId set to "" — those would be
+        # mistaken for spans by the processor and emitted as malformed OTLP.
+        subscription_filter_pattern = (
+            self.node.try_get_context("subscription_filter_pattern") or ""
+        )
 
         # ------- S3 Bucket - Firehose backup destination -------
         backup_bucket = s3.Bucket(
@@ -190,7 +198,7 @@ class TraceExporterStack(cdk.Stack):
             "SpansSubscriptionFilter",
             log_group_name=log_group_name,
             destination_arn=delivery_stream.attr_arn,
-            filter_pattern="",  # Empty pattern matches all events
+            filter_pattern=subscription_filter_pattern,
             role_arn=cw_logs_role.role_arn,
             filter_name="ac-trace-exporter-subscription",
         )

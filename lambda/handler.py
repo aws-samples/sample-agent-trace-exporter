@@ -648,6 +648,32 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     return {"records": output_records}
 
 
+def _is_span_record(span: dict[str, Any]) -> bool:
+    """True only for records that are genuinely spans.
+
+    Both checks matter when the subscribed log group is an AgentCore runtime's own
+    log group (the unified span destination), because that group mixes spans with
+    LOG records:
+
+    1. Valid ids. Log records emitted outside any span carry "traceId": "".
+       Serialised as spans they produce zero-length ids and the backend rejects the
+       ENTIRE ExportTraceServiceRequest with "trace ids must be 128 bit, received
+       0 bits" — so one junk record silently destroys every real span batched with
+       it.
+
+    2. Span shape. Log records emitted *inside* a span carry that span's real
+       traceId AND spanId, so an id check alone passes them. They then become
+       nameless, parentless phantom spans that collide with the real span of the
+       same id, and the trace renders as duplicated subtrees. Real spans always
+       carry a name and a start/end timestamp; log records carry neither.
+    """
+    trace_id = span.get("traceId") or ""
+    span_id = span.get("spanId") or ""
+    if len(trace_id) != 32 or len(span_id) != 16:
+        return False
+    return bool(span.get("name")) and span.get("startTimeUnixNano") is not None
+
+
 def _extract_spans(span_data: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract individual spans from either batch or single-span format."""
     spans: list[dict[str, Any]] = []
@@ -668,4 +694,9 @@ def _extract_spans(span_data: dict[str, Any]) -> list[dict[str, Any]]:
             span_data["instrumentationScope"] = span_data["scope"]
         spans.append(span_data)
 
-    return spans
+    valid = [s for s in spans if _is_span_record(s)]
+    if len(valid) != len(spans):
+        logger.info(
+            "Skipped %d non-span record(s)", len(spans) - len(valid)
+        )
+    return valid
